@@ -1,16 +1,23 @@
-"""Pyicloud Session handling"""
+"""Pyicloud Session handling with encrypted session storage"""
 
+import base64
 import http.cookiejar
 import logging
 import os
 import os.path as path
-from json import JSONDecodeError, dump, load
+import stat
+from json import JSONDecodeError, dumps, loads
 from re import match
 from typing import Any, NoReturn, Optional, Union, cast
 
 import requests
 import requests.cookies
 from requests.models import Response
+
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import keyring
 
 from pyicloud.const import (
     CONTENT_TYPE,
@@ -53,8 +60,10 @@ class PyiCloudSession(requests.Session):
         self._service = service
         self.verify = verify
         self._cookie_directory: str = cookie_directory
+        self._ensure_secure_directory()
         self.cookies = PyiCloudCookieJar(self.cookiejar_path)
         self._data: dict[str, Any] = {}
+        self._encryption_key = self._get_or_create_encryption_key()
 
         self._logger: logging.Logger = logging.getLogger(__name__)
 
@@ -81,33 +90,80 @@ class PyiCloudSession(requests.Session):
             self._logger.addFilter(self.service.password_filter)
         return self._logger
 
+    def _ensure_secure_directory(self) -> None:
+        """Ensure cookie directory exists with secure permissions."""
+        if not os.path.exists(self._cookie_directory):
+            os.makedirs(self._cookie_directory, mode=0o700)  # Owner only: rwx------
+        else:
+            # Fix permissions if directory already exists
+            os.chmod(self._cookie_directory, 0o700)
+
+    def _get_or_create_encryption_key(self) -> Fernet:
+        """Get or create encryption key using keyring for secure storage."""
+        service_name = "pyicloud-secure"
+        key_name = f"session-key-{self.service.account_name}"
+        
+        # Try to get existing key from keyring
+        stored_key = keyring.get_password(service_name, key_name)
+        
+        if stored_key:
+            return Fernet(stored_key.encode())
+        
+        # Generate new key if none exists
+        key = Fernet.generate_key()
+        keyring.set_password(service_name, key_name, key.decode())
+        self._logger.debug("Generated new encryption key for session storage")
+        return Fernet(key)
+
+    def _encrypt_data(self, data: str) -> bytes:
+        """Encrypt string data."""
+        return self._encryption_key.encrypt(data.encode('utf-8'))
+
+    def _decrypt_data(self, encrypted_data: bytes) -> str:
+        """Decrypt data to string."""
+        return self._encryption_key.decrypt(encrypted_data).decode('utf-8')
+
     def _load_session_data(self) -> None:
-        """Load session_data from file."""
+        """Load encrypted session_data from file."""
         if os.path.exists(self.cookiejar_path):
             cast(PyiCloudCookieJar, self.cookies).load(
                 ignore_discard=True, ignore_expires=True
             )
 
-        self._logger.debug("Using session file %s", self.session_path)
+        self._logger.debug("Using encrypted session file %s", self.session_path)
         self._data: dict[str, Any] = {}
         try:
-            with open(self.session_path, encoding="utf-8") as session_f:
-                self._data = load(session_f)
+            if os.path.exists(self.session_path):
+                with open(self.session_path, "rb") as session_f:
+                    encrypted_data = session_f.read()
+                    if encrypted_data:  # Only decrypt if file has content
+                        decrypted_json = self._decrypt_data(encrypted_data)
+                        self._data = loads(decrypted_json)
         except (
             JSONDecodeError,
             OSError,
-        ):
-            self._logger.info("Session file does not exist")
+            Exception,  # Catch encryption errors
+        ) as e:
+            self._logger.info("Encrypted session file does not exist or is corrupted: %s", e)
 
     def _save_session_data(self) -> None:
-        """Save session_data to file."""
-        with open(self.session_path, "w", encoding="utf-8") as outfile:
-            dump(self._data, outfile)
-            self.logger.debug("Saved session data to file: %s", self.session_path)
+        """Save encrypted session_data to file."""
+        # Encrypt session data before writing
+        json_data = dumps(self._data)
+        encrypted_data = self._encrypt_data(json_data)
+        
+        # Write encrypted data with secure file permissions
+        with open(self.session_path, "wb") as outfile:
+            outfile.write(encrypted_data)
+        os.chmod(self.session_path, 0o600)  # Owner read/write only
+        self.logger.debug("Saved encrypted session data to file: %s", self.session_path)
 
+        # Save cookies and secure the file
         cast(PyiCloudCookieJar, self.cookies).save(
             ignore_discard=True, ignore_expires=True
         )
+        if os.path.exists(self.cookiejar_path):
+            os.chmod(self.cookiejar_path, 0o600)  # Owner read/write only
         self.logger.debug("Saved cookies data to file: %s", self.cookiejar_path)
 
     def _update_session_data(self, response: Response) -> None:

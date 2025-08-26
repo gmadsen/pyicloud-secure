@@ -75,17 +75,28 @@ python = '''
 [tool.setuptools_scm]
 
 [build-system]
-requires = ["setuptools >= 77.0,< 80.10", "setuptools-scm"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "pyicloud"
-dynamic = ["version", "readme", "dependencies", "optional-dependencies"]
-description = "PyiCloud is a module which allows pythonistas to interact with iCloud webservices."
+name = "pyicloud-secure"
+version = "2.0.3+security.1"
+readme = "README.md"
+description = "Security-hardened PyiCloud fork with encrypted session storage and enhanced authentication security."
 requires-python = ">=3.10"
-license-files = ["LICENSE.txt"]
+license = {text = "MIT"}
 authors = [
-    {name = "The PyiCloud Authors"}
+    {name = "The PyiCloud Authors"},
+    {name = "TechMaster ⚡", email = "noreply@anthropic.com"}
+]
+dependencies = [
+    "cryptography>=41.0.0",
+    "keyring>=24.0.0", 
+    "fido2>=1.1.0",
+    "requests>=2.31.0",
+    "srp>=1.0.18",
+    "tzlocal>=4.3",
+    "six",
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -104,18 +115,28 @@ keywords = ["icloud", "find-my-iphone"]
 
 
 [project.urls]
-homepage = "https://github.com/timlaing/pyicloud"
-download = "https://github.com/timlaing/pyicloud/releases/latest"
-bug_tracker = "https://github.com/timlaing/pyicloud/issues"
-repository = "https://github.com/timlaing/pyicloud"
+homepage = "https://github.com/gmadsen/pyicloud-secure"
+download = "https://github.com/gmadsen/pyicloud-secure/releases/latest"  
+bug_tracker = "https://github.com/gmadsen/pyicloud-secure/issues"
+repository = "https://github.com/gmadsen/pyicloud-secure"
+upstream = "https://github.com/timlaing/pyicloud"
 
 [project.scripts]
 icloud = "pyicloud.cmdline:main"
 
-[tool.setuptools]
-packages = ["pyicloud", "pyicloud.services"]
+[tool.hatch.build.targets.wheel]
+packages = ["pyicloud"]
 
-[tool.setuptools.dynamic]
-readme = {file = "README.md", content-type = "text/markdown"}
-dependencies = {file = ["requirements.txt"]}
-optional-dependencies = {test = {file = ["requirements_test.txt"]}}
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4.0",
+    "pytest-socket>=0.6.0", 
+    "pytest-cov>=4.1.0",
+    "coverage>=7.2.0",
+]
+dev = [
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "pre-commit>=3.4.0",
+]
